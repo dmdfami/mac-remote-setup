@@ -43,7 +43,7 @@ OS=$(sw_vers -productVersion)
 MODEL=$(sysctl -n hw.model 2>/dev/null)
 RAM=$(($(sysctl -n hw.memsize 2>/dev/null) / 1073741824))GB
 
-cloudflared tunnel --url ssh://localhost:22 2>&1 | while read line; do
+/opt/homebrew/bin/cloudflared tunnel --url ssh://localhost:22 2>&1 | while read line; do
   echo "$line"
   URL=$(echo "$line" | grep -o 'https://[a-z0-9\-]*\.trycloudflare\.com')
   if [ -n "$URL" ]; then
