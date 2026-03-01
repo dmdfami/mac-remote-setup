@@ -103,10 +103,12 @@ sleep 1
 launchctl load ~/Library/LaunchAgents/com.cloudflare.tunnel.plist
 
 # 6. Claude CLI keychain unlock hint
+# 6. Claude CLI keychain unlock
 echo "[6/6] Claude CLI..."
 if command -v claude &>/dev/null; then
-  echo "      Claude CLI found. For SSH access run on this Mac:"
-  echo "      security unlock-keychain ~/Library/Keychains/login.keychain-db"
+  echo "      Unlocking keychain for SSH access..."
+  security unlock-keychain ~/Library/Keychains/login.keychain-db
+  echo "      Claude CLI ready for SSH!"
 else
   echo "      Claude CLI not installed (skip)"
 fi
