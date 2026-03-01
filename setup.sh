@@ -21,6 +21,11 @@ else
   eval "$(/opt/homebrew/bin/brew shellenv)"
 fi
 
+# PATH for SSH sessions (.zshenv is loaded for ALL zsh sessions including non-interactive SSH)
+if ! grep -q 'homebrew' ~/.zshenv 2>/dev/null; then
+  echo 'export PATH=/opt/homebrew/bin:/opt/homebrew/sbin:$PATH' >> ~/.zshenv
+fi
+
 # 2. Node.js (skip if exists)
 if command -v node &>/dev/null; then
   echo "[2/6] Node.js OK (skip)"
@@ -104,18 +109,29 @@ launchctl load ~/Library/LaunchAgents/com.cloudflare.tunnel.plist
 
 # 6. Claude CLI — export credentials for SSH access
 echo "[6/6] Claude CLI..."
-if command -v claude &>/dev/null; then
+if [ -f /opt/homebrew/bin/claude ] || command -v claude &>/dev/null; then
+  # Try Keychain first (GUI login stores here)
   CRED=$(security find-generic-password -s "Claude Code-credentials" -w 2>/dev/null)
   if [ -n "$CRED" ]; then
     mkdir -p ~/.claude
-    echo "$CRED" > ~/.claude/.credentials
-    chmod 600 ~/.claude/.credentials
+    # Claude CLI reads .credentials.json (NOT .credentials)
+    echo "$CRED" > ~/.claude/.credentials.json
+    chmod 600 ~/.claude/.credentials.json
     echo "      Credentials exported for SSH access!"
+  elif [ -f ~/.claude/.credentials.json ]; then
+    echo "      Credentials file OK (skip)"
+  elif [ -f ~/.claude/.credentials ]; then
+    # Fix: rename old .credentials to .credentials.json
+    cp ~/.claude/.credentials ~/.claude/.credentials.json
+    chmod 600 ~/.claude/.credentials.json
+    echo "      Credentials migrated (.credentials → .credentials.json)"
   else
-    echo "      No credentials found. Run 'claude' and /login first."
+    echo "      No credentials found. Run 'claude' and /login first, then re-run this script."
   fi
 else
-  echo "      Claude CLI not installed (skip)"
+  echo "      Installing Claude CLI..."
+  npm install -g @anthropic-ai/claude-code 2>/dev/null
+  echo "      Claude installed. Run 'claude' to login, then re-run this script."
 fi
 
 # Wait for tunnel
