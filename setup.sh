@@ -107,8 +107,45 @@ pkill -f "cloudflared tunnel" 2>/dev/null
 sleep 1
 launchctl load ~/Library/LaunchAgents/com.cloudflare.tunnel.plist
 
-# 6. Claude CLI — export credentials for SSH access
-echo "[6/6] Claude CLI..."
+# 6. VPS-like access — sudo NOPASSWD + keychain auto-unlock
+echo "[6/7] VPS-like access (sudo + keychain)..."
+CURRENT_USER=$(whoami)
+
+# 6a. Sudo NOPASSWD (requires password once during setup)
+if sudo -n true 2>/dev/null; then
+  echo "      sudo NOPASSWD already configured (skip)"
+else
+  echo "      Setting up sudo NOPASSWD..."
+  echo "      Enter your Mac password (one-time only):"
+  read -s USER_PASS
+  echo "$USER_PASS" | sudo -S sh -c "echo \"$CURRENT_USER ALL=(ALL) NOPASSWD: ALL\" > /etc/sudoers.d/$CURRENT_USER && chmod 440 /etc/sudoers.d/$CURRENT_USER" 2>/dev/null
+  if sudo -n true 2>/dev/null; then
+    echo "      sudo NOPASSWD OK!"
+
+    # 6b. Keychain auto-unlock on SSH login (uses same password)
+    mkdir -p ~/.ssh
+    echo "$USER_PASS" > ~/.ssh/.keychain-pass
+    chmod 600 ~/.ssh/.keychain-pass
+
+    cat > ~/.ssh/unlock-keychain.sh << 'KCEOF'
+#!/bin/bash
+security unlock-keychain -p "$(cat ~/.ssh/.keychain-pass)" ~/Library/Keychains/login.keychain-db 2>/dev/null
+KCEOF
+    chmod 700 ~/.ssh/unlock-keychain.sh
+
+    # Add to .zshenv for auto-unlock on SSH
+    grep -q "unlock-keychain" ~/.zshenv 2>/dev/null || echo '[ -f ~/.ssh/unlock-keychain.sh ] && ~/.ssh/unlock-keychain.sh' >> ~/.zshenv
+
+    # Unlock now
+    security unlock-keychain -p "$USER_PASS" ~/Library/Keychains/login.keychain-db 2>/dev/null
+    echo "      Keychain auto-unlock configured!"
+  else
+    echo "      [WARN] Wrong password — sudo + keychain skipped. Re-run script to retry."
+  fi
+fi
+
+# 7. Claude CLI — export credentials for SSH access
+echo "[7/7] Claude CLI..."
 if [ -f /opt/homebrew/bin/claude ] || command -v claude &>/dev/null; then
   # Try Keychain first (GUI login stores here)
   CRED=$(security find-generic-password -s "Claude Code-credentials" -w 2>/dev/null)
@@ -155,5 +192,9 @@ echo "  Tunnel: ${TUNNEL_URL:-check /tmp/cf-tunnel.log}"
 echo "  LAN:    ssh $MY_USER@$MY_LAN"
 echo "  Host:   $MY_HOST"
 echo "  Reboot: auto-reconnect YES"
+SUDO_STATUS="NO"
+sudo -n true 2>/dev/null && SUDO_STATUS="YES"
+echo "  Sudo:   NOPASSWD=$SUDO_STATUS"
+echo "  Keychain: auto-unlock=$([ -f ~/.ssh/unlock-keychain.sh ] && echo YES || echo NO)"
 echo "============================================"
 read -p "Press Enter to close..."
