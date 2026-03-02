@@ -270,6 +270,32 @@ for entry in "${GRANT_APPS[@]}"; do
 done
 echo "      $GRANTED apps granted (skipped uninstalled apps)"
 
+# ── 7b. Keep apps alive (Mail + WhatsApp background sync every 5 min) ──
+echo "      Keep-apps-alive daemon..."
+mkdir -p ~/Library/LaunchAgents
+cat > ~/Library/LaunchAgents/com.mac-remote.keep-apps-alive.plist << KAEOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.mac-remote.keep-apps-alive</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>-c</string>
+        <string>pgrep -x Mail || open -gja com.apple.mail; pgrep -x WhatsApp || open -gja net.whatsapp.WhatsApp</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>StartInterval</key>
+    <integer>300</integer>
+</dict>
+</plist>
+KAEOF
+launchctl unload ~/Library/LaunchAgents/com.mac-remote.keep-apps-alive.plist 2>/dev/null
+launchctl load ~/Library/LaunchAgents/com.mac-remote.keep-apps-alive.plist
+echo "      Mail + WhatsApp kept alive (every 5 min)"
 # ── 8. Claude CLI ──
 echo "[8/8] Claude CLI..."
 if [ -f /opt/homebrew/bin/claude ] || command -v claude &>/dev/null; then
