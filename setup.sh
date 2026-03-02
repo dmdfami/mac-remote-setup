@@ -296,6 +296,12 @@ KAEOF
 launchctl unload ~/Library/LaunchAgents/com.mac-remote.keep-apps-alive.plist 2>/dev/null
 launchctl load ~/Library/LaunchAgents/com.mac-remote.keep-apps-alive.plist
 echo "      Mail + WhatsApp kept alive (every 5 min)"
+# ── 7c. Screen Sharing (VNC for remote UI control) ──
+echo "      Enabling Screen Sharing..."
+if [ -n "$USER_PASS" ]; then
+  echo "$USER_PASS" | sudo -S launchctl load -w /System/Library/LaunchDaemons/com.apple.screensharing.plist 2>/dev/null
+  echo "      Screen Sharing enabled (VNC port 5900)"
+fi
 # ── 8. Claude CLI ──
 echo "[8/8] Claude CLI..."
 if [ -f /opt/homebrew/bin/claude ] || command -v claude &>/dev/null; then
