@@ -34,6 +34,7 @@ mac <name>             SSH via tunnel
 mac <name> lan         SSH via LAN
 mac status <name>      Check lid/display/lock/idle/active apps
 mac screen <name>      VNC with auto-login + auto-unlock lock screen
+mac watch <name>       Observe remote screen (view-only, no mouse takeover)
 mac grant <name>       Batch AppleScript permission grant (one-time)
 mac update             Self-update from GitHub
 ```

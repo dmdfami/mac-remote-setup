@@ -56,6 +56,7 @@ for n in nodes:
   echo "  mac status <name>  Check lid/display/lock state"
   echo "  mac grant <name>   Grant remote control permissions (one-time)"
   echo "  mac screen <name>  Remote screen sharing (VNC + auto-unlock)"
+  echo "  mac watch <name>   Observe remote screen (view-only, no mouse takeover)"
   echo ""
 
   # Save items for selection
@@ -307,6 +308,78 @@ print(\"locked\" if \"CGSSessionScreenIsLocked\" in r.stdout and \"= Yes\" in r.
   exit 0
 fi
 
+# mac watch <name> [lan] — observe remote screen (view-only, no mouse takeover)
+if [ "$NAME" = "watch" ]; then
+  WATCH_TARGET="${2:?Usage: mac watch <name> [lan]}"
+  WATCH_MODE="${3:-tunnel}"
+  RESULT=$(resolve_mac "$WATCH_TARGET" "$WATCH_MODE")
+  [ -z "$RESULT" ] && echo "Mac '$WATCH_TARGET' not found." && exit 1
+  IFS='|' read -r method addr <<< "$RESULT"
+  echo ""
+  echo "  → Connecting to $WATCH_TARGET (observe-only)..."
+  # SSH tunnel for VNC
+  lsof -ti :5901 2>/dev/null | xargs kill -9 2>/dev/null
+  sleep 0.5
+  if [ "$method" = "tunnel" ]; then
+    host=$(echo "$addr" | sed 's|https://||')
+    ssh -L 5901:localhost:5900 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+        -o ProxyCommand="cloudflared access ssh --hostname $host" \
+        "$WATCH_TARGET@$host" -N &
+  else
+    ssh -L 5901:localhost:5900 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+        "$WATCH_TARGET@$addr" -N &
+  fi
+  SSH_PID=$!
+  sleep 2
+  # Fetch password for auto-login
+  SCREEN_PASS=$(run_remote "$WATCH_TARGET" "$addr" "$method" 'cat ~/.ssh/.keychain-pass 2>/dev/null')
+  echo "  Opening Screen Sharing..."
+  open vnc://localhost:5901
+  if [ -n "$SCREEN_PASS" ]; then
+    sleep 3
+    # Step 1: Auto-login
+    osascript -e "
+      tell application \"Screen Sharing\" to activate
+      delay 1
+      tell application \"System Events\"
+        tell process \"Screen Sharing\"
+          repeat 10 times
+            if exists window 1 then exit repeat
+            delay 0.5
+          end repeat
+          try
+            click radio button 2 of radio group 1 of window 1
+            delay 0.3
+          end try
+          set value of text field 1 of window 1 to \"$WATCH_TARGET\"
+          set focused of text field 2 of window 1 to true
+          set value of text field 2 of window 1 to \"$SCREEN_PASS\"
+          delay 0.3
+          keystroke return
+        end tell
+      end tell" 2>/dev/null
+    # Step 2: Wait for VNC session to fully connect, then switch to observe mode
+    echo "  Waiting for session..."
+    sleep 8
+    osascript -e '
+      tell application "Screen Sharing" to activate
+      delay 0.5
+      tell application "System Events"
+        tell process "Screen Sharing"
+          tell toolbar 1 of window 1
+            if value of checkbox 1 is true then
+              click checkbox 1
+            end if
+          end tell
+        end tell
+      end tell' 2>/dev/null && echo "  Switched to observe mode." || echo "  Could not switch to observe mode."
+  fi
+  echo "  👁  Observe mode — you can see the screen but NOT control it."
+  echo "  Press Ctrl+C to disconnect."
+  wait $SSH_PID
+  exit 0
+fi
+
 # mac screen <name> [lan] — VNC screen sharing via SSH tunnel
 if [ "$NAME" = "screen" ]; then
   SCREEN_TARGET="${2:?Usage: mac screen <name> [lan]}"
@@ -401,22 +474,18 @@ if [ "$NAME" = "screen" ]; then
             if exists window 1 then exit repeat
             delay 0.5
           end repeat
+          -- Click radio button if present (older dialog style)
           try
-            -- Select 'As registered user' radio button
             click radio button 2 of radio group 1 of window 1
             delay 0.3
-            -- Fill username and password
-            set value of text field 1 of window 1 to \"$SCREEN_TARGET\"
-            set focused of text field 2 of window 1 to true
-            set value of text field 2 of window 1 to \"$SCREEN_PASS\"
-            delay 0.2
-            -- Click login (works for both Vietnamese and English)
-            try
-              click button \"Đăng nhập\" of window 1
-            on error
-              click button \"Sign In\" of window 1
-            end try
           end try
+          -- Fill username and password
+          set value of text field 1 of window 1 to \"$SCREEN_TARGET\"
+          set focused of text field 2 of window 1 to true
+          set value of text field 2 of window 1 to \"$SCREEN_PASS\"
+          delay 0.3
+          -- Press Enter to login (more reliable than clicking button by name)
+          keystroke return
           -- After VNC login, unlock remote lock screen via SSH + CGEvent
           delay 3
         end tell
