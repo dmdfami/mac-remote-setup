@@ -56,7 +56,6 @@ for n in nodes:
   echo "  mac status <name>  Check lid/display/lock state"
   echo "  mac grant <name>   Grant remote control permissions (one-time)"
   echo "  mac screen <name>  Remote screen sharing (VNC + auto-unlock)"
-  echo "  mac watch <name>   Observe remote screen (view-only, no mouse takeover)"
   echo "  mac live <name>    Live screen stream via SSH (no VNC, fully stealth)"
   echo ""
 
@@ -331,9 +330,11 @@ if [ "$NAME" = "live" ]; then
   fi
   echo "  Press Q or Ctrl+C to stop."
   echo ""
-  # Python script for remote screen capture → MJPEG stdout
-  PYSCRIPT="import Quartz,CoreFoundation,sys,time
-q=$QUALITY;d=$FPS
+  # Step 1: Deploy capture script to remote Mac
+  run_remote "$LIVE_TARGET" "$addr" "$method" "cat > /tmp/.mac-live.py << 'PYEOF'
+import Quartz,CoreFoundation,sys,time,os
+q=float(sys.argv[1]);d=float(sys.argv[2])
+fd=os.fdopen(sys.stdout.fileno(),'wb',0)
 while True:
  img=Quartz.CGWindowListCreateImage(Quartz.CGRectInfinite,Quartz.kCGWindowListOptionOnScreenOnly,Quartz.kCGNullWindowID,0)
  if img is None:time.sleep(0.5);continue
@@ -342,98 +343,21 @@ while True:
  Quartz.CGImageDestinationAddImage(dst,img,{Quartz.kCGImageDestinationLossyCompressionQuality:q})
  Quartz.CGImageDestinationFinalize(dst)
  buf=CoreFoundation.CFDataGetBytes(data,CoreFoundation.CFRangeMake(0,CoreFoundation.CFDataGetLength(data)),None)
- sys.stdout.buffer.write(buf);sys.stdout.buffer.flush()
+ fd.write(buf)
  time.sleep(d)
-"
-  # Stream: pipe Python script to remote → MJPEG → local ffplay
+PYEOF" >/dev/null
+  # Step 2: Stream — run remote script → SSH pipe → local ffplay
   if [ "$method" = "tunnel" ]; then
     host=$(echo "$addr" | sed 's|https://||')
-    echo "$PYSCRIPT" | ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+    ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
       -o ProxyCommand="cloudflared access ssh --hostname $host" \
-      "$LIVE_TARGET@$host" python3 - 2>/dev/null
+      "$LIVE_TARGET@$host" "python3 /tmp/.mac-live.py $QUALITY $FPS" 2>/dev/null
   else
-    echo "$PYSCRIPT" | ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-      "$LIVE_TARGET@$addr" python3 - 2>/dev/null
+    ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+      "$LIVE_TARGET@$addr" "python3 /tmp/.mac-live.py $QUALITY $FPS" 2>/dev/null
   fi | ffplay -f mjpeg -probesize 32 -fflags nobuffer -framedrop \
     -window_title "Live: $LIVE_TARGET" -loglevel quiet -i - 2>/dev/null
   echo "  Stream ended."
-  exit 0
-fi
-
-# mac watch <name> [lan] — observe remote screen (view-only, no mouse takeover)
-if [ "$NAME" = "watch" ]; then
-  WATCH_TARGET="${2:?Usage: mac watch <name> [lan]}"
-  WATCH_MODE="${3:-tunnel}"
-  RESULT=$(resolve_mac "$WATCH_TARGET" "$WATCH_MODE")
-  [ -z "$RESULT" ] && echo "Mac '$WATCH_TARGET' not found." && exit 1
-  IFS='|' read -r method addr <<< "$RESULT"
-  echo ""
-  echo "  → Connecting to $WATCH_TARGET (observe-only)..."
-  # SSH tunnel for VNC
-  lsof -ti :5901 2>/dev/null | xargs kill -9 2>/dev/null
-  sleep 0.5
-  if [ "$method" = "tunnel" ]; then
-    host=$(echo "$addr" | sed 's|https://||')
-    ssh -L 5901:localhost:5900 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-        -o ProxyCommand="cloudflared access ssh --hostname $host" \
-        "$WATCH_TARGET@$host" -N &
-  else
-    ssh -L 5901:localhost:5900 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-        "$WATCH_TARGET@$addr" -N &
-  fi
-  SSH_PID=$!
-  sleep 2
-  # Fetch password for auto-login
-  SCREEN_PASS=$(run_remote "$WATCH_TARGET" "$addr" "$method" 'cat ~/.ssh/.keychain-pass 2>/dev/null')
-  echo "  Opening Screen Sharing..."
-  open vnc://localhost:5901
-  if [ -n "$SCREEN_PASS" ]; then
-    sleep 3
-    # Step 1: Auto-login
-    osascript -e "
-      tell application \"Screen Sharing\" to activate
-      delay 1
-      tell application \"System Events\"
-        tell process \"Screen Sharing\"
-          repeat 10 times
-            if exists window 1 then exit repeat
-            delay 0.5
-          end repeat
-          try
-            click radio button 2 of radio group 1 of window 1
-            delay 0.3
-          end try
-          set value of text field 1 of window 1 to \"$WATCH_TARGET\"
-          set focused of text field 2 of window 1 to true
-          set value of text field 2 of window 1 to \"$SCREEN_PASS\"
-          delay 0.3
-          keystroke return
-        end tell
-      end tell" 2>/dev/null
-    # Step 2: Wait for VNC session, reopen window, switch to observe mode
-    echo "  Waiting for session..."
-    sleep 8
-    osascript -e '
-      tell application "Screen Sharing"
-        activate
-        reopen
-      end tell
-      delay 2
-      tell application "System Events"
-        tell process "Screen Sharing"
-          if (count of windows) > 0 then
-            tell toolbar 1 of window 1
-              if value of checkbox 1 is true then
-                click checkbox 1
-              end if
-            end tell
-          end if
-        end tell
-      end tell' 2>/dev/null && echo "  Switched to observe mode." || echo "  Could not switch to observe mode."
-  fi
-  echo "  👁  Observe mode — you can see the screen but NOT control it."
-  echo "  Press Ctrl+C to disconnect."
-  wait $SSH_PID
   exit 0
 fi
 
