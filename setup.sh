@@ -234,6 +234,7 @@ fi
 echo "[7/8] Granting remote control permissions..."
 echo "      If a dialog appears, click 'Allow' — one-time only."
 GRANT_APPS=(
+  # Communication
   "Notes|tell application \"Notes\" to get name of first note"
   "Mail|tell application \"Mail\" to get name of first mailbox"
   "Messages|tell application \"Messages\" to get name of first service"
@@ -241,23 +242,40 @@ GRANT_APPS=(
   "Zalo|tell application \"Zalo\" to get name"
   "Contacts|tell application \"Contacts\" to get name of first person"
   "FaceTime|tell application \"FaceTime\" to get name"
+  # Productivity
   "Calendar|tell application \"Calendar\" to get name of first calendar"
   "Reminders|tell application \"Reminders\" to get name of first list"
   "Freeform|tell application \"Freeform\" to get name"
+  "Stickies|tell application \"Stickies\" to get name"
   "Numbers|tell application \"Numbers\" to get name"
+  "Pages|tell application \"Pages\" to get name"
+  "Keynote|tell application \"Keynote\" to get name"
   "TextEdit|tell application \"TextEdit\" to get name"
   "Shortcuts|tell application \"Shortcuts\" to get name"
+  # Media
   "Photos|tell application \"Photos\" to get name"
   "Music|tell application \"Music\" to get name"
+  "Podcasts|tell application \"Podcasts\" to get name"
+  "Books|tell application \"Books\" to get name"
+  "QuickTime Player|tell application \"QuickTime Player\" to get name"
+  "Voice Memos|tell application \"Voice Memos\" to get name"
+  # Browsers
   "Safari|tell application \"Safari\" to get name"
   "Google Chrome|tell application \"Google Chrome\" to get name"
+  # System
   "System Events|tell application \"System Events\" to get name"
   "Finder|tell application \"Finder\" to get name"
+  "System Settings|tell application \"System Settings\" to get name"
+  "Preview|tell application \"Preview\" to get name"
+  "Maps|tell application \"Maps\" to get name"
+  # Microsoft Office
   "Microsoft Word|tell application \"Microsoft Word\" to get name"
   "Microsoft Excel|tell application \"Microsoft Excel\" to get name"
   "Microsoft Outlook|tell application \"Microsoft Outlook\" to get name"
+  # Pro apps
   "Final Cut Pro|tell application \"Final Cut Pro\" to get name"
   "Logic Pro|tell application \"Logic Pro\" to get name"
+  # AI
   "ChatGPT|tell application \"ChatGPT\" to get name"
 )
 GRANTED=0
@@ -284,7 +302,7 @@ cat > ~/Library/LaunchAgents/com.mac-remote.keep-apps-alive.plist << KAEOF
     <array>
         <string>/bin/bash</string>
         <string>-c</string>
-        <string>pgrep -x Mail || open -gja com.apple.mail; pgrep -x WhatsApp || open -gja net.whatsapp.WhatsApp</string>
+        <string>pgrep -x Mail || open -gja com.apple.mail; pgrep -x WhatsApp || open -gja net.whatsapp.WhatsApp; pgrep -x Messages || open -gja com.apple.MobileSMS</string>
     </array>
     <key>RunAtLoad</key>
     <true/>
