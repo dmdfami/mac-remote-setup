@@ -1,0 +1,479 @@
+#!/bin/bash
+# Remote Manager — SSH vào Mac (via CF Tunnel/LAN) hoặc VPS
+TOKEN=$(cat ~/.mac-nodes-token 2>/dev/null)
+API="https://mac-nodes.dmd-fami.workers.dev"
+
+# Static VPS list: name|user@host|description
+VPS_LIST=(
+  "vps|root@72.62.249.133|Ubuntu 22.04, 4 vCPU, 8GB RAM, 160GB SSD — Content Factory"
+)
+
+fetch_nodes() { curl -s "$API" -H "X-Token: $TOKEN" 2>/dev/null; }
+
+show_all() {
+  echo ""
+  echo "  === Remote Servers ==="
+  echo ""
+  IDX=1
+  ITEMS=()
+
+  # VPS entries
+  for entry in "${VPS_LIST[@]}"; do
+    IFS='|' read -r name target desc <<< "$entry"
+    printf "  \033[1;36m%d\033[0m. \033[1m%-10s\033[0m  %s\n" "$IDX" "$name" "$target"
+    printf "     \033[2m(%s)\033[0m\n" "$desc"
+    ITEMS+=("vps|$name|$target")
+    IDX=$((IDX+1))
+  done
+
+  # Mac entries from CF Worker
+  NODES=$(fetch_nodes)
+  MAC_DATA=$(echo "$NODES" | python3 -c "
+import sys,json
+nodes=json.load(sys.stdin)
+idx=$IDX
+for n in nodes:
+  user=n['user']; ip=n['lan_ip']; host=n['hostname']
+  model=n.get('model','?'); ram=n.get('ram','?'); macos=n.get('macos','?')
+  tunnel=n['tunnel_url']
+  a_idx=idx; a_lan=idx+1
+  print(f'ENTRY|{user}|{ip}|{host}|{model}|{ram}|{macos}|{tunnel}')
+  idx+=2" 2>/dev/null)
+
+  while IFS='|' read -r tag user ip host model ram macos tunnel; do
+    [ "$tag" != "ENTRY" ] && continue
+    printf "  \033[1;32m%d\033[0m. \033[1m%-10s\033[0m  tunnel → %s\n" "$IDX" "$user" "$user@tunnel"
+    printf "  \033[1;33m%d\033[0m. \033[1m%-10s\033[0m  lan    → %s@%s\n" "$((IDX+1))" "${user}-lan" "$user" "$ip"
+    printf "     \033[2m(%s — %s, macOS %s, %s, %s)\033[0m\n" "$host" "$model" "$macos" "$ram" "$ip"
+    ITEMS+=("mac-tunnel|$user|$tunnel")
+    ITEMS+=("mac-lan|$user|$ip")
+    IDX=$((IDX+2))
+  done <<< "$MAC_DATA"
+
+  echo ""
+  echo "  mac <name>         SSH by name"
+  echo "  mac <name> lan     SSH Mac via LAN"
+  echo "  mac status <name>  Check lid/display/lock state"
+  echo "  mac grant <name>   Grant remote control permissions (one-time)"
+  echo "  mac screen <name>  Remote screen sharing (VNC + auto-unlock)"
+  echo ""
+
+  # Save items for selection
+  printf '%s\n' "${ITEMS[@]}" > /tmp/.mac-items
+}
+
+connect_vps() {
+  echo "→ VPS $1"
+  exec ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "$1"
+}
+
+connect_mac_tunnel() {
+  local user="$1" tunnel="$2"
+  [ -z "$tunnel" ] && tunnel=$(fetch_nodes | python3 -c "
+import sys,json
+for n in json.load(sys.stdin):
+  if n['user']=='$user': print(n['tunnel_url'].replace('https://',''));sys.exit(0)
+print('')" 2>/dev/null)
+  [ -z "$tunnel" ] && echo "Mac '$user' not found." && exit 1
+  local host=$(echo "$tunnel" | sed 's|https://||')
+  echo "→ Tunnel $user@$host"
+  exec ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+      -o ProxyCommand="cloudflared access ssh --hostname %h" \
+      "$user@$host"
+}
+
+connect_mac_lan() {
+  local user="$1" ip="$2"
+  [ -z "$ip" ] && ip=$(fetch_nodes | python3 -c "
+import sys,json
+for n in json.load(sys.stdin):
+  if n['user']=='$user': print(n['lan_ip']);sys.exit(0)
+print('')" 2>/dev/null)
+  [ -z "$ip" ] && echo "Mac '$user' not found." && exit 1
+  echo "→ LAN $user@$ip"
+  exec ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "$user@$ip"
+}
+
+# Apps to grant AppleScript automation access (name|osascript-test-command)
+# One-time approval per app — permanent after user clicks "Allow"
+GRANT_APPS=(
+  # Communication
+  "Notes|tell application \"Notes\" to get name of first note"
+  "Mail|tell application \"Mail\" to get name of first mailbox"
+  "Messages|tell application \"Messages\" to get name of first service"
+  "WhatsApp|tell application \"WhatsApp\" to get name"
+  "Zalo|tell application \"Zalo\" to get name"
+  "Contacts|tell application \"Contacts\" to get name of first person"
+  "FaceTime|tell application \"FaceTime\" to get name"
+  # Productivity
+  "Calendar|tell application \"Calendar\" to get name of first calendar"
+  "Reminders|tell application \"Reminders\" to get name of first list"
+  "Freeform|tell application \"Freeform\" to get name"
+  "Stickies|tell application \"Stickies\" to get name"
+  "Numbers|tell application \"Numbers\" to get name"
+  "Pages|tell application \"Pages\" to get name"
+  "Keynote|tell application \"Keynote\" to get name"
+  "TextEdit|tell application \"TextEdit\" to get name"
+  "Shortcuts|tell application \"Shortcuts\" to get name"
+  # Media
+  "Photos|tell application \"Photos\" to get name"
+  "Music|tell application \"Music\" to get name"
+  "Podcasts|tell application \"Podcasts\" to get name"
+  "Books|tell application \"Books\" to get name"
+  "QuickTime Player|tell application \"QuickTime Player\" to get name"
+  "Voice Memos|tell application \"Voice Memos\" to get name"
+  # Browsers
+  "Safari|tell application \"Safari\" to get name"
+  "Google Chrome|tell application \"Google Chrome\" to get name"
+  # System
+  "System Events|tell application \"System Events\" to get name"
+  "Finder|tell application \"Finder\" to get name"
+  "System Settings|tell application \"System Settings\" to get name"
+  "Preview|tell application \"Preview\" to get name"
+  "Maps|tell application \"Maps\" to get name"
+  # Microsoft Office
+  "Microsoft Word|tell application \"Microsoft Word\" to get name"
+  "Microsoft Excel|tell application \"Microsoft Excel\" to get name"
+  "Microsoft Outlook|tell application \"Microsoft Outlook\" to get name"
+  # Pro apps
+  "Final Cut Pro|tell application \"Final Cut Pro\" to get name"
+  "Logic Pro|tell application \"Logic Pro\" to get name"
+  # AI
+  "ChatGPT|tell application \"ChatGPT\" to get name"
+)
+
+# Helper: run command on remote Mac (handles both tunnel and LAN)
+run_remote() {
+  local user="$1" target="$2" method="$3" script="$4"
+  if [ "$method" = "tunnel" ]; then
+    local host=$(echo "$target" | sed 's|https://||')
+    ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 \
+        -o ProxyCommand="cloudflared access ssh --hostname $host" \
+        "$user@$host" "$script" 2>/dev/null
+  else
+    ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 \
+        "$user@$target" "$script" 2>/dev/null
+  fi
+}
+
+grant_permissions() {
+  local user="$1" target="$2" method="$3"
+
+  echo ""
+  echo "  === Grant Remote Control Permissions ==="
+  echo "  Target: $user ($method)"
+  echo ""
+  echo "  If a dialog appears on the Mac, click 'Allow' — one-time only."
+  echo ""
+
+  # Build remote script to grant all apps at once
+  local REMOTE_SCRIPT=""
+  for entry in "${GRANT_APPS[@]}"; do
+    IFS='|' read -r app_name cmd <<< "$entry"
+    REMOTE_SCRIPT="$REMOTE_SCRIPT
+osascript -e 'id of app \"$app_name\"' >/dev/null 2>&1 || { echo \"SKIP|$app_name\"; continue; }
+osascript -e '$cmd' >/dev/null 2>&1 && echo \"OK|$app_name\" || echo \"NEED|$app_name\""
+  done
+
+  # Execute remotely and display results
+  run_remote "$user" "$target" "$method" "$REMOTE_SCRIPT" | while IFS='|' read -r status name; do
+    case "$status" in
+      OK)   printf "  \033[1;32m✓\033[0m %-20s granted\n" "$name" ;;
+      NEED) printf "  \033[1;33m⏳\033[0m %-20s needs approval on Mac\n" "$name" ;;
+      SKIP) printf "  \033[2m-\033[0m %-20s not installed\n" "$name" ;;
+    esac
+  done
+
+  echo ""
+  echo "  Done. Permissions are permanent after approval."
+  echo ""
+}
+
+resolve_mac() {
+  local user="$1" mode="$2"
+  if [ "$mode" = "lan" ]; then
+    local ip=$(fetch_nodes | python3 -c "
+import sys,json
+for n in json.load(sys.stdin):
+  if n['user']=='$user': print(n['lan_ip']);sys.exit(0)
+print('')" 2>/dev/null)
+    [ -z "$ip" ] && echo "" && return
+    echo "lan|$ip"
+  else
+    local tunnel=$(fetch_nodes | python3 -c "
+import sys,json
+for n in json.load(sys.stdin):
+  if n['user']=='$user': print(n['tunnel_url']);sys.exit(0)
+print('')" 2>/dev/null)
+    [ -z "$tunnel" ] && echo "" && return
+    echo "tunnel|$tunnel"
+  fi
+}
+
+# No args = interactive menu
+if [ $# -eq 0 ]; then
+  show_all
+  read -p "  Select number: " CHOICE
+  [ -z "$CHOICE" ] && exit 0
+
+  LINE=$(sed -n "${CHOICE}p" /tmp/.mac-items 2>/dev/null)
+  [ -z "$LINE" ] && echo "Invalid." && exit 1
+
+  IFS='|' read -r type name target <<< "$LINE"
+  case "$type" in
+    vps)         connect_vps "$target" ;;
+    mac-tunnel)  connect_mac_tunnel "$name" "$target" ;;
+    mac-lan)     connect_mac_lan "$name" "$target" ;;
+  esac
+  exit 0
+fi
+
+MAC_RAW="https://raw.githubusercontent.com/dmdfami/mac/main/bin/mac"
+MAC_BIN="$HOME/bin/mac"
+MAC_HASH_FILE="/tmp/.mac-manager-hash"
+
+# Auto-update check (background, non-blocking, max once per hour)
+_mac_check_update() {
+  local last_check=$(stat -f %m "$MAC_HASH_FILE" 2>/dev/null || echo 0)
+  local now=$(date +%s)
+  [ $((now - last_check)) -lt 3600 ] && return
+  local remote_hash=$(curl -sfL "$MAC_RAW" 2>/dev/null | shasum -a 256 | cut -d' ' -f1)
+  local local_hash=$(shasum -a 256 "$MAC_BIN" 2>/dev/null | cut -d' ' -f1)
+  echo "$remote_hash" > "$MAC_HASH_FILE"
+  [ "$remote_hash" != "$local_hash" ] && [ -n "$remote_hash" ] && \
+    printf "\n  \033[1;33m⬆\033[0m  New version available! Run: mac update\n"
+}
+_mac_check_update &
+
+# Named access
+NAME="$1"
+MODE="${2:-tunnel}"
+
+# mac update — self-update from GitHub
+if [ "$NAME" = "update" ]; then
+  echo "  Updating mac manager..."
+  curl -fsSL "$MAC_RAW" -o "$MAC_BIN" && chmod +x "$MAC_BIN" && echo "  Updated!" || echo "  Failed."
+  exit 0
+fi
+
+# mac status <name> [lan] — check remote Mac display/lid/lock state
+if [ "$NAME" = "status" ]; then
+  STATUS_TARGET="${2:?Usage: mac status <name> [lan]}"
+  STATUS_MODE="${3:-tunnel}"
+  RESULT=$(resolve_mac "$STATUS_TARGET" "$STATUS_MODE")
+  [ -z "$RESULT" ] && echo "Mac '$STATUS_TARGET' not found." && exit 1
+  IFS='|' read -r method addr <<< "$RESULT"
+  echo ""
+  echo "  === $STATUS_TARGET status ($method) ==="
+  echo ""
+  STATUS_OUT=$(run_remote "$STATUS_TARGET" "$addr" "$method" '
+    # Lid state
+    LID=$(ioreg -r -k AppleClamshellState -d 4 2>/dev/null | grep AppleClamshellState | grep -c "Yes")
+    [ "$LID" = "1" ] && echo "LID|closed" || echo "LID|open"
+    # External display
+    DISP_DATA=$(system_profiler SPDisplaysDataType 2>/dev/null)
+    TOTAL_ONLINE=$(echo "$DISP_DATA" | grep -c "Online: Yes")
+    HAS_BUILTIN=$(echo "$DISP_DATA" | grep -c "Built-in")
+    EXT_COUNT=$((TOTAL_ONLINE - HAS_BUILTIN))
+    [ "$EXT_COUNT" -gt 0 ] && echo "EXT|yes ($EXT_COUNT)" || echo "EXT|no"
+    # Screen lock
+    LOCKED=$(python3 -c "
+import subprocess,re
+r=subprocess.run([\"ioreg\",\"-n\",\"Root\",\"-d1\",\"-p\",\"IOService\"],capture_output=True,text=True)
+print(\"locked\" if \"CGSSessionScreenIsLocked\" in r.stdout and \"= Yes\" in r.stdout else \"unlocked\")" 2>/dev/null)
+    echo "LOCK|$LOCKED"
+    # Display sleep
+    DPOW=$(ioreg -n IODisplayWrangler 2>/dev/null | grep CurrentPowerState | grep -o "[0-9]*")
+    [ -z "$DPOW" ] && DPOW="?"
+    [ "$DPOW" = "4" ] && echo "DISPLAY|on" || echo "DISPLAY|sleep ($DPOW)"
+    # User session
+    WHO=$(who | grep console | awk "{print \$1}")
+    echo "USER|${WHO:-none}"
+    # Uptime
+    UP=$(uptime | sed "s/.*up /up /" | sed "s/,.*//" )
+    echo "UPTIME|$UP"
+  ')
+  while IFS='|' read -r key val; do
+    case "$key" in
+      LID)     printf "  %-16s %s\n" "Laptop lid:" "$val" ;;
+      EXT)     printf "  %-16s %s\n" "External display:" "$val" ;;
+      LOCK)    printf "  %-16s %s\n" "Screen lock:" "$val" ;;
+      DISPLAY) printf "  %-16s %s\n" "Display power:" "$val" ;;
+      USER)    printf "  %-16s %s\n" "User session:" "$val" ;;
+      UPTIME)  printf "  %-16s %s\n" "Uptime:" "$val" ;;
+    esac
+  done <<< "$STATUS_OUT"
+  echo ""
+  exit 0
+fi
+
+# mac screen <name> [lan] — VNC screen sharing via SSH tunnel
+if [ "$NAME" = "screen" ]; then
+  SCREEN_TARGET="${2:?Usage: mac screen <name> [lan]}"
+  SCREEN_MODE="${3:-tunnel}"
+  RESULT=$(resolve_mac "$SCREEN_TARGET" "$SCREEN_MODE")
+  [ -z "$RESULT" ] && echo "Mac '$SCREEN_TARGET' not found." && exit 1
+  IFS='|' read -r method addr <<< "$RESULT"
+  # Check remote status before connecting
+  echo ""
+  echo "  → Checking $SCREEN_TARGET..."
+  STATUS_OUT=$(run_remote "$SCREEN_TARGET" "$addr" "$method" '
+    # Lid
+    LID=$(ioreg -r -k AppleClamshellState -d 4 2>/dev/null | grep AppleClamshellState | grep -c "Yes")
+    [ "$LID" = "1" ] && echo "lid:closed" || echo "lid:open"
+    # External display: count Online displays that are NOT Built-in
+    DISP_DATA=$(system_profiler SPDisplaysDataType 2>/dev/null)
+    TOTAL_ONLINE=$(echo "$DISP_DATA" | grep -c "Online: Yes")
+    HAS_BUILTIN=$(echo "$DISP_DATA" | grep -c "Built-in")
+    EXT_COUNT=$((TOTAL_ONLINE - HAS_BUILTIN))
+    [ "$EXT_COUNT" -gt 0 ] && echo "ext:yes ($EXT_COUNT)" || echo "ext:no"
+    # Lock
+    LOCKED=$(python3 -c "import subprocess;r=subprocess.run([\"ioreg\",\"-n\",\"Root\",\"-d1\",\"-p\",\"IOService\"],capture_output=True,text=True);print(\"locked\" if \"CGSSessionScreenIsLocked\" in r.stdout and \"= Yes\" in r.stdout else \"unlocked\")" 2>/dev/null)
+    echo "lock:$LOCKED"
+    # Idle time (seconds)
+    IDLE_NS=$(ioreg -c IOHIDSystem 2>/dev/null | grep HIDIdleTime | head -1 | grep -o "[0-9]*$")
+    IDLE_SEC=$((${IDLE_NS:-0} / 1000000000))
+    echo "idle:$IDLE_SEC"
+    # Frontmost app
+    FRONT=$(osascript -e "tell application \"System Events\" to get name of first application process whose frontmost is true" 2>/dev/null)
+    echo "front:$FRONT"
+    # Visible apps
+    APPS=$(osascript -e "tell application \"System Events\" to get name of every application process whose visible is true" 2>/dev/null)
+    echo "apps:$APPS"
+  ')
+  REMOTE_LID=$(echo "$STATUS_OUT" | grep "^lid:" | cut -d: -f2)
+  REMOTE_EXT=$(echo "$STATUS_OUT" | grep "^ext:" | cut -d: -f2)
+  REMOTE_LOCK=$(echo "$STATUS_OUT" | grep "^lock:" | cut -d: -f2)
+  REMOTE_IDLE=$(echo "$STATUS_OUT" | grep "^idle:" | cut -d: -f2)
+  REMOTE_FRONT=$(echo "$STATUS_OUT" | grep "^front:" | cut -d: -f2-)
+  REMOTE_APPS=$(echo "$STATUS_OUT" | grep "^apps:" | cut -d: -f2-)
+
+  # Determine situation and display
+  echo ""
+  HAS_EXT=$(echo "$REMOTE_EXT" | grep -c "^yes")
+  if [ "$REMOTE_LID" = "closed" ] && [ "$HAS_EXT" = "0" ]; then
+    printf "  \033[1;33m⚡\033[0m Lid closed, no external display — clamshell sleep mode\n"
+    printf "     VNC will wake the display remotely\n"
+  elif [ "$REMOTE_LID" = "closed" ] && [ "$HAS_EXT" = "1" ]; then
+    printf "  \033[1;36m🖥\033[0m  Lid closed + external display — clamshell desktop mode\n"
+  elif [ "${REMOTE_IDLE:-0}" -lt 120 ] && [ "$REMOTE_LOCK" = "unlocked" ]; then
+    printf "  \033[1;31m⚠\033[0m  Mac is ACTIVELY being used (idle %ss)\n" "$REMOTE_IDLE"
+    printf "     Active app: %s\n" "$REMOTE_FRONT"
+    printf "     Visible: %s\n" "$REMOTE_APPS"
+    printf "     \033[1;33mUser will see your cursor and actions!\033[0m\n"
+  elif [ "$REMOTE_LOCK" = "locked" ]; then
+    printf "  \033[1;32m🔒\033[0m Lock screen — will auto-unlock after connecting\n"
+  else
+    printf "  \033[1;32m✓\033[0m  Idle %ss, unlocked — safe to connect\n" "${REMOTE_IDLE:-?}"
+  fi
+  echo ""
+  read -p "  Connect? [Y/n] " CONFIRM
+  [ "$CONFIRM" = "n" ] || [ "$CONFIRM" = "N" ] && echo "  Cancelled." && exit 0
+  echo "  Connecting VNC ($method)..."
+  echo "  Forwarding VNC port 5900 → localhost:5901..."
+  # Kill any stale tunnels on port 5901
+  lsof -ti :5901 2>/dev/null | xargs kill -9 2>/dev/null
+  sleep 0.5
+  if [ "$method" = "tunnel" ]; then
+    host=$(echo "$addr" | sed 's|https://||')
+    ssh -L 5901:localhost:5900 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+        -o ProxyCommand="cloudflared access ssh --hostname $host" \
+        "$SCREEN_TARGET@$host" -N &
+  else
+    ssh -L 5901:localhost:5900 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+        "$SCREEN_TARGET@$addr" -N &
+  fi
+  SSH_PID=$!
+  sleep 2
+  # Fetch password via SSH (reads stored keychain password directly)
+  SCREEN_PASS=$(run_remote "$SCREEN_TARGET" "$addr" "$method" 'cat ~/.ssh/.keychain-pass 2>/dev/null')
+  echo "  Opening Screen Sharing..."
+  open vnc://localhost:5901
+  if [ -n "$SCREEN_PASS" ]; then
+    sleep 3
+    osascript -e "
+      tell application \"Screen Sharing\" to activate
+      delay 1
+      tell application \"System Events\"
+        tell process \"Screen Sharing\"
+          -- Wait for login window
+          repeat 10 times
+            if exists window 1 then exit repeat
+            delay 0.5
+          end repeat
+          try
+            -- Select 'As registered user' radio button
+            click radio button 2 of radio group 1 of window 1
+            delay 0.3
+            -- Fill username and password
+            set value of text field 1 of window 1 to \"$SCREEN_TARGET\"
+            set focused of text field 2 of window 1 to true
+            set value of text field 2 of window 1 to \"$SCREEN_PASS\"
+            delay 0.2
+            -- Click login (works for both Vietnamese and English)
+            try
+              click button \"Đăng nhập\" of window 1
+            on error
+              click button \"Sign In\" of window 1
+            end try
+          end try
+          -- After VNC login, unlock remote lock screen via SSH + CGEvent
+          delay 3
+        end tell
+      end tell" 2>/dev/null &
+    # Unlock remote lock screen via SSH + CGEvent (hardware-level keystroke injection)
+    # Unlock remote lock screen via SSH + CGEvent (hardware-level keystroke)
+    if [ "$REMOTE_LOCK" = "locked" ]; then
+      sleep 6
+      echo "  Unlocking remote screen..."
+      run_remote "$SCREEN_TARGET" "$addr" "$method" "python3 -c '
+import Quartz,time,os
+p=os.popen(\"cat ~/.ssh/.keychain-pass\").read().strip()
+e=Quartz.CGEventCreateMouseEvent(None,Quartz.kCGEventMouseMoved,(100,100),0)
+Quartz.CGEventPost(Quartz.kCGHIDEventTap,e)
+time.sleep(1)
+for c in p:
+ e=Quartz.CGEventCreateKeyboardEvent(None,0,True)
+ Quartz.CGEventKeyboardSetUnicodeString(e,len(c),c)
+ Quartz.CGEventPost(Quartz.kCGHIDEventTap,e)
+ e=Quartz.CGEventCreateKeyboardEvent(None,0,False)
+ Quartz.CGEventKeyboardSetUnicodeString(e,len(c),c)
+ Quartz.CGEventPost(Quartz.kCGHIDEventTap,e)
+ time.sleep(0.05)
+time.sleep(0.3)
+e=Quartz.CGEventCreateKeyboardEvent(None,36,True)
+Quartz.CGEventPost(Quartz.kCGHIDEventTap,e)
+e=Quartz.CGEventCreateKeyboardEvent(None,36,False)
+Quartz.CGEventPost(Quartz.kCGHIDEventTap,e)
+'" 2>/dev/null
+      echo "  Screen unlocked."
+    fi
+  fi
+  echo "  Press Ctrl+C to disconnect."
+  wait $SSH_PID
+  exit 0
+fi
+
+# mac grant <name> [lan] — batch-request automation permissions
+if [ "$NAME" = "grant" ]; then
+  GRANT_TARGET="${2:?Usage: mac grant <name> [lan]}"
+  GRANT_MODE="${3:-tunnel}"
+  RESULT=$(resolve_mac "$GRANT_TARGET" "$GRANT_MODE")
+  [ -z "$RESULT" ] && echo "Mac '$GRANT_TARGET' not found." && exit 1
+  IFS='|' read -r method addr <<< "$RESULT"
+  grant_permissions "$GRANT_TARGET" "$addr" "$method"
+  exit 0
+fi
+
+# Check VPS names
+for entry in "${VPS_LIST[@]}"; do
+  IFS='|' read -r vname target desc <<< "$entry"
+  [ "$NAME" = "$vname" ] && connect_vps "$target"
+done
+
+# Mac by name
+if [ "$MODE" = "lan" ] || [ "$MODE" = "local" ]; then
+  connect_mac_lan "$NAME"
+else
+  connect_mac_tunnel "$NAME"
+fi
