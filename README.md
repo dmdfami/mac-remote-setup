@@ -34,7 +34,6 @@ mac <name>             SSH via tunnel
 mac <name> lan         SSH via LAN
 mac status <name>      Check lid/display/lock/idle/active apps
 mac screen <name>      VNC with auto-login + auto-unlock lock screen
-mac live <name>        Live screen stream via SSH (no VNC, fully stealth)
 mac grant <name>       Batch AppleScript permission grant (one-time)
 mac update             Self-update from GitHub
 ```
@@ -46,7 +45,6 @@ Your Mac                          Remote Mac
 ────────                          ──────────
 mac lucy ──── CF Tunnel ────────→ SSH (port 22)
 mac screen ── SSH tunnel 5901 ──→ VNC (port 5900) + CGEvent unlock
-mac live ──── SSH + CoreGraphics → MJPEG stream → local ffplay
 mac grant ─── SSH + osascript ──→ AppleScript automation per app
 mac status ── SSH + ioreg ──────→ lid/display/lock/idle detection
 ```
