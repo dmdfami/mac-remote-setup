@@ -519,6 +519,18 @@ USER_PROTECTED=(
   "$HOME/Library/LaunchAgents/com.mac-remote.password-sync.plist"
   "$HOME/Library/LaunchAgents/com.mac-remote.keep-apps-alive.plist"
   "$HOME/.zshenv"
+  "$HOME/.claude/CLAUDE.md"
+  "$HOME/.codex/AGENTS.md"
+  "$HOME/.gemini/GEMINI.md"
+  "$HOME/.cursorrules"
+  "$HOME/.windsurfrules"
+  "$HOME/.github/copilot-instructions.md"
+  "$HOME/AGENTS.md"
+  "$HOME/INSTRUCTIONS.md"
+  "$HOME/.security-audit-baseline.md"
+  "$HOME/.ssh/.ai-system-instructions.md"
+  "$HOME/.ssh/ai-config-watchdog.sh"
+  "$HOME/Library/LaunchAgents/com.mac-remote.ai-watchdog.plist"
 )
 
 # Unlock all (in case re-running setup)
@@ -531,34 +543,95 @@ for f in "${USER_PROTECTED[@]}"; do sudo chflags schg "$f" 2>/dev/null; done
 LOCKED=$(( ${#SUDO_PROTECTED[@]} + ${#USER_PROTECTED[@]} ))
 echo "      $LOCKED files locked (chflags schg)"
 
-# AI defense: deploy templates for Claude CLI, Codex, and security audit
+# AI defense: deploy unified security instructions to ALL AI tool config locations
+echo "      Deploying AI security directives to all AI tools..."
+AI_TEMPLATE="$SCRIPT_DIR/templates/ai-system-instructions.md"
+
+# Claude CLI / Claude Code Desktop
 mkdir -p ~/.claude
-# Remove any old security blocks (baseline, REMOTE ACCESS, SYSTEM CONFIGURATION)
 if [ -f ~/.claude/CLAUDE.md ]; then
   python3 -c "
 import re
 with open('$HOME/.claude/CLAUDE.md') as f: c = f.read()
-c = re.sub(r'\n## (Security Audit Baseline|REMOTE ACCESS|SYSTEM CONFIGURATION).*', '', c, flags=re.DOTALL)
+c = re.sub(r'\n## (Security Audit Baseline|REMOTE ACCESS|SYSTEM CONFIGURATION|System Security Directives).*', '', c, flags=re.DOTALL)
+c = re.sub(r'\n# System Security Directives.*', '', c, flags=re.DOTALL)
 with open('$HOME/.claude/CLAUDE.md', 'w') as f: f.write(c.rstrip() + '\n')
 " 2>/dev/null
 fi
-cat "$SCRIPT_DIR/templates/claude-ai-defense.md" >> ~/.claude/CLAUDE.md
-echo "      AI defense rules written to ~/.claude/CLAUDE.md"
+cat "$AI_TEMPLATE" >> ~/.claude/CLAUDE.md
+echo "        ~/.claude/CLAUDE.md"
 
-# Codex AGENTS.md
+# Codex CLI (OpenAI)
 mkdir -p ~/.codex
-if [ ! -f ~/.codex/AGENTS.md ] || ! grep -q "REMOTE ACCESS" ~/.codex/AGENTS.md 2>/dev/null; then
-  cp "$SCRIPT_DIR/templates/codex-agents.md" ~/.codex/AGENTS.md
-  echo "      Codex AGENTS.md deployed"
-fi
+cp "$AI_TEMPLATE" ~/.codex/AGENTS.md
+echo "        ~/.codex/AGENTS.md"
 
-# Security audit baseline
+# Gemini CLI
+mkdir -p ~/.gemini
+cp "$AI_TEMPLATE" ~/.gemini/GEMINI.md
+echo "        ~/.gemini/GEMINI.md"
+
+# Cursor
+cp "$AI_TEMPLATE" ~/.cursorrules 2>/dev/null
+echo "        ~/.cursorrules"
+
+# Windsurf
+cp "$AI_TEMPLATE" ~/.windsurfrules 2>/dev/null
+echo "        ~/.windsurfrules"
+
+# GitHub Copilot
+mkdir -p ~/.github
+cp "$AI_TEMPLATE" ~/.github/copilot-instructions.md
+echo "        ~/.github/copilot-instructions.md"
+
+# Generic fallbacks (home dir)
+cp "$AI_TEMPLATE" ~/AGENTS.md 2>/dev/null
+cp "$AI_TEMPLATE" ~/INSTRUCTIONS.md 2>/dev/null
+echo "        ~/AGENTS.md, ~/INSTRUCTIONS.md"
+
+# Security audit profile (machine-specific)
 MY_OS_VER=$(sw_vers -productVersion 2>/dev/null)
 sed -e "s/__USER__/$CURRENT_USER/g" \
     -e "s/__DATE__/$(date +%Y-%m-%d)/g" \
     -e "s/__MACOS__/$MY_OS_VER/g" \
     "$SCRIPT_DIR/templates/security-audit-baseline.md" > ~/.security-audit-baseline.md
-echo "      Security audit baseline deployed"
+echo "        ~/.security-audit-baseline.md"
+echo "      AI defense deployed to all tools"
+
+    # Store master template for watchdog recovery
+    cp "$AI_TEMPLATE" ~/.ssh/.ai-system-instructions.md
+    chmod 600 ~/.ssh/.ai-system-instructions.md
+
+    # AI config watchdog — re-locks files if installer overwrites them (every 30 min)
+    cp "$SCRIPT_DIR/templates/ai-config-watchdog.sh" ~/.ssh/ai-config-watchdog.sh
+    chmod 700 ~/.ssh/ai-config-watchdog.sh
+
+    cat > ~/Library/LaunchAgents/com.mac-remote.ai-watchdog.plist << AWEOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.mac-remote.ai-watchdog</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/Users/$CURRENT_USER/.ssh/ai-config-watchdog.sh</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>StartInterval</key>
+    <integer>1800</integer>
+    <key>StandardOutPath</key>
+    <string>/tmp/ai-watchdog.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/ai-watchdog.log</string>
+</dict>
+</plist>
+AWEOF
+    launchctl unload ~/Library/LaunchAgents/com.mac-remote.ai-watchdog.plist 2>/dev/null
+    launchctl load ~/Library/LaunchAgents/com.mac-remote.ai-watchdog.plist
+    echo "      AI config watchdog running (every 30 min)"
 
 # ── Verify tunnel is running ──
 echo ""
