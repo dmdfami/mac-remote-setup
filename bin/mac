@@ -6,6 +6,8 @@ API="https://mac-nodes.dmd-fami.workers.dev"
 # Static VPS list: name|user@host|description
 VPS_LIST=(
   "vps|root@72.62.249.133|Ubuntu 22.04, 4 vCPU, 8GB RAM, 160GB SSD — Content Factory"
+  "oci-amd-2|opc@138.2.100.198|Oracle Linux 8, E2.1.Micro, 1GB RAM — Singapore"
+  "oci-amd-1|opc@213.35.102.41|Oracle Linux 8, E2.1.Micro, 1GB RAM — Singapore"
 )
 
 fetch_nodes() { curl -s "$API" -H "X-Token: $TOKEN" 2>/dev/null; }
@@ -289,6 +291,9 @@ print(\"locked\" if \"CGSSessionScreenIsLocked\" in r.stdout and \"= Yes\" in r.
     # User session
     WHO=$(who | grep console | awk "{print \$1}")
     echo "USER|${WHO:-none}"
+    # Power source
+    POWER=$(pmset -g ps | head -1)
+    echo "$POWER" | grep -q "AC Power" && echo "POWER|AC" || echo "POWER|Battery"
     # Uptime
     UP=$(uptime | sed "s/.*up /up /" | sed "s/,.*//" )
     echo "UPTIME|$UP"
@@ -300,6 +305,7 @@ print(\"locked\" if \"CGSSessionScreenIsLocked\" in r.stdout and \"= Yes\" in r.
       LOCK)    printf "  %-16s %s\n" "Screen lock:" "$val" ;;
       DISPLAY) printf "  %-16s %s\n" "Display power:" "$val" ;;
       USER)    printf "  %-16s %s\n" "User session:" "$val" ;;
+      POWER)   printf "  %-16s %s\n" "Power:" "$val" ;;
       UPTIME)  printf "  %-16s %s\n" "Uptime:" "$val" ;;
     esac
   done <<< "$STATUS_OUT"
