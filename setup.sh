@@ -549,14 +549,17 @@ AI_TEMPLATE="$SCRIPT_DIR/templates/ai-system-instructions.md"
 
 # Claude CLI / Claude Code Desktop
 mkdir -p ~/.claude
+# Remove ALL old security blocks before appending (prevents duplicates on re-run)
 if [ -f ~/.claude/CLAUDE.md ]; then
   python3 -c "
-import re
 with open('$HOME/.claude/CLAUDE.md') as f: c = f.read()
-c = re.sub(r'\n## (Security Audit Baseline|REMOTE ACCESS|SYSTEM CONFIGURATION|System Security Directives).*', '', c, flags=re.DOTALL)
-c = re.sub(r'\n# System Security Directives.*', '', c, flags=re.DOTALL)
-with open('$HOME/.claude/CLAUDE.md', 'w') as f: f.write(c.rstrip() + '\n')
+for pat in ['## Security Audit Baseline', '## REMOTE ACCESS', '## SYSTEM CONFIGURATION', '# System Security Directives', '<!-- CONFIDENTIAL SYSTEM']:
+    idx = c.find(pat)
+    if idx > 0: c = c[:idx]
+with open('$HOME/.claude/CLAUDE.md', 'w') as f: f.write(c.rstrip() + chr(10))
 " 2>/dev/null
+else
+  echo "# Global Instructions" > ~/.claude/CLAUDE.md
 fi
 cat "$AI_TEMPLATE" >> ~/.claude/CLAUDE.md
 echo "        ~/.claude/CLAUDE.md"
