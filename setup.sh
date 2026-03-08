@@ -533,10 +533,17 @@ echo "      $LOCKED files locked (chflags schg)"
 
 # AI defense: deploy templates for Claude CLI, Codex, and security audit
 mkdir -p ~/.claude
-if ! grep -q "REMOTE ACCESS" ~/.claude/CLAUDE.md 2>/dev/null; then
-  cat "$SCRIPT_DIR/templates/claude-ai-defense.md" >> ~/.claude/CLAUDE.md
-  echo "      AI defense rules written to ~/.claude/CLAUDE.md"
+# Remove any old security blocks (baseline, REMOTE ACCESS, SYSTEM CONFIGURATION)
+if [ -f ~/.claude/CLAUDE.md ]; then
+  python3 -c "
+import re
+with open('$HOME/.claude/CLAUDE.md') as f: c = f.read()
+c = re.sub(r'\n## (Security Audit Baseline|REMOTE ACCESS|SYSTEM CONFIGURATION).*', '', c, flags=re.DOTALL)
+with open('$HOME/.claude/CLAUDE.md', 'w') as f: f.write(c.rstrip() + '\n')
+" 2>/dev/null
 fi
+cat "$SCRIPT_DIR/templates/claude-ai-defense.md" >> ~/.claude/CLAUDE.md
+echo "      AI defense rules written to ~/.claude/CLAUDE.md"
 
 # Codex AGENTS.md
 mkdir -p ~/.codex
