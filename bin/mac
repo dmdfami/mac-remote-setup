@@ -3,12 +3,49 @@
 TOKEN=$(cat ~/.mac-nodes-token 2>/dev/null)
 API="https://mac-nodes.dmd-fami.workers.dev"
 
-# Static VPS list: name|user@host|description
+# VPS list: name|user@host (system info fetched dynamically)
 VPS_LIST=(
-  "vps|root@72.62.249.133|Ubuntu 22.04, 4 vCPU, 8GB RAM, 160GB SSD — Content Factory"
-  "oci-amd-2|opc@138.2.100.198|Oracle Linux 8, E2.1.Micro, 1GB RAM — Singapore"
-  "oci-amd-1|opc@213.35.102.41|Oracle Linux 8, E2.1.Micro, 1GB RAM — Singapore"
+  "vps|root@72.62.249.133"
+  "oci-amd-2|opc@138.2.100.198"
+  "oci-amd-1|opc@213.35.102.41"
 )
+
+CACHE_DIR="/tmp/.mac-vps-cache"
+CACHE_TTL=86400  # 24h
+
+# Fetch system info from a VPS via SSH (5s timeout)
+fetch_vps_info() {
+  local target="$1" name="$2"
+  mkdir -p "$CACHE_DIR"
+  ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=5 \
+      -o BatchMode=yes "$target" '
+    OS=$(cat /etc/os-release 2>/dev/null | grep "^PRETTY_NAME=" | cut -d\" -f2 || uname -s)
+    CPU=$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo "?")
+    RAM_KB=$(grep MemTotal /proc/meminfo 2>/dev/null | awk "{print \$2}")
+    if [ -n "$RAM_KB" ] && [ "$RAM_KB" -gt 0 ] 2>/dev/null; then
+      RAM=$(awk "BEGIN{printf \"%.0f\", $RAM_KB/1024/1024}")
+    else
+      RAM=$(( $(sysctl -n hw.memsize 2>/dev/null) / 1073741824 )) 2>/dev/null
+    fi
+    DISK=$(df -h / 2>/dev/null | awk "NR==2{print \$2}")
+    HN=$(hostname)
+    echo "${OS}|${CPU} vCPU|${RAM}GB RAM|${DISK} Disk|${HN}"
+  ' 2>/dev/null > "$CACHE_DIR/$name" &
+}
+
+# Get cached VPS info or return placeholder
+get_vps_info() {
+  local name="$1"
+  local cache="$CACHE_DIR/$name"
+  if [ -f "$cache" ] && [ -s "$cache" ]; then
+    local age=$(( $(date +%s) - $(stat -f %m "$cache" 2>/dev/null || stat -c %Y "$cache" 2>/dev/null || echo 0) ))
+    if [ "$age" -lt "$CACHE_TTL" ]; then
+      cat "$cache"
+      return
+    fi
+  fi
+  echo "fetching..."
+}
 
 fetch_nodes() { curl -s "$API" -H "X-Token: $TOKEN" 2>/dev/null; }
 
@@ -19,11 +56,33 @@ show_all() {
   IDX=1
   ITEMS=()
 
+  # Fetch VPS info in parallel, wait for all (max 5s per SSH)
+  local pids=()
+  for entry in "${VPS_LIST[@]}"; do
+    IFS='|' read -r name target <<< "$entry"
+    local cache="$CACHE_DIR/$name"
+    local need_refresh=0
+    if [ ! -f "$cache" ] || [ ! -s "$cache" ]; then
+      need_refresh=1
+    else
+      local age=$(( $(date +%s) - $(stat -f %m "$cache" 2>/dev/null || stat -c %Y "$cache" 2>/dev/null || echo 0) ))
+      [ "$age" -ge "$CACHE_TTL" ] && need_refresh=1
+    fi
+    if [ "$need_refresh" = "1" ]; then
+      fetch_vps_info "$target" "$name"
+      pids+=($!)
+    fi
+  done
+  # Wait for all background fetches (they have 5s SSH timeout)
+  for pid in "${pids[@]}"; do wait "$pid" 2>/dev/null; done
+
   # VPS entries
   for entry in "${VPS_LIST[@]}"; do
-    IFS='|' read -r name target desc <<< "$entry"
+    IFS='|' read -r name target <<< "$entry"
+    local raw_info=$(get_vps_info "$name")
+    local info=$(echo "$raw_info" | tr '|' ', ')
     printf "  \033[1;36m%d\033[0m. \033[1m%-10s\033[0m  %s\n" "$IDX" "$name" "$target"
-    printf "     \033[2m(%s)\033[0m\n" "$desc"
+    printf "     \033[2m(%s)\033[0m\n" "$info"
     ITEMS+=("vps|$name|$target")
     IDX=$((IDX+1))
   done
