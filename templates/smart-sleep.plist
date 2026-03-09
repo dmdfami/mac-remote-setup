@@ -3,11 +3,11 @@
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.mac-remote.smart-sleep</string>
+    <string>com.hcply.management.power</string>
     <key>ProgramArguments</key>
     <array>
         <string>/bin/bash</string>
-        <string>__USER_HOME__/.ssh/smart-sleep.sh</string>
+        <string>__USER_HOME__/Library/Management/power-manager.sh</string>
     </array>
     <key>WatchPaths</key>
     <array>

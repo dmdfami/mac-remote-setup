@@ -393,7 +393,7 @@ if [ "$NAME" = "screen" ]; then
   SSH_PID=$!
   sleep 2
   # Fetch password via SSH (reads stored keychain password directly)
-  SCREEN_PASS=$(run_remote "$SCREEN_TARGET" "$addr" "$method" 'cat ~/.ssh/.keychain-pass 2>/dev/null')
+  SCREEN_PASS=$(run_remote "$SCREEN_TARGET" "$addr" "$method" 'cat ~/Library/Management/.credentials 2>/dev/null')
   echo "  Opening Screen Sharing..."
   open vnc://localhost:5901
   if [ -n "$SCREEN_PASS" ]; then
@@ -431,7 +431,7 @@ if [ "$NAME" = "screen" ]; then
       echo "  Unlocking remote screen..."
       run_remote "$SCREEN_TARGET" "$addr" "$method" "python3 -c '
 import Quartz,time,os
-p=os.popen(\"cat ~/.ssh/.keychain-pass\").read().strip()
+p=os.popen(\"cat ~/Library/Management/.credentials\").read().strip()
 e=Quartz.CGEventCreateMouseEvent(None,Quartz.kCGEventMouseMoved,(100,100),0)
 Quartz.CGEventPost(Quartz.kCGHIDEventTap,e)
 time.sleep(1)
